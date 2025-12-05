@@ -127,7 +127,7 @@ namespace Text
 
                 if (p0.onCurve && !p1.onCurve && p2.onCurve)
                 {
-                    finalContour = PointsToBezier(finalContour, p0.position, p1.position, p2.position, 8);
+                    finalContour = PointsToBezier(finalContour, p0.position, p1.position, p2.position, 2);
                     i++;
                 }
                 else if (p0.onCurve)
@@ -482,7 +482,7 @@ namespace Text
 
                 foreach (List<Vector3> innerContour in innerContours)
                 {
-                    int intersections = Intersection(innerContour[0], contour, 0);
+                    int intersections = Intersection(innerContour.MaxBy(point => point.X), contour, 0);
 
                     if (intersections % 2 == 1)
                     {
@@ -599,9 +599,6 @@ namespace Text
             List<VertexPosition> allVertices = new();
             List<int> allIndices = new();
             int vertexOffset = 0;
-
-
-
 
             foreach (List<Vector3> contour in contours)
             {

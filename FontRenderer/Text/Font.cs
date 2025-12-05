@@ -1,11 +1,14 @@
 ﻿using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Reflection.PortableExecutable;
+using System.Text;
 using static Microsoft.Xna.Framework.Graphics.SpriteFont;
 
 
@@ -24,6 +27,7 @@ namespace Text
         public Dictionary<char, Glyph> CharacterGlyphDict;
         (uint unicode, uint index)[] CharacterIndexMap;
         (uint advanceWidth, int leftSideBearing)[] Metrics;
+        public KerningPair[] Kerning;
         int glyphCount;
 
 
@@ -46,6 +50,8 @@ namespace Text
 
             CharacterGlyphDict = GetCharacterGlyphDict();
 
+            Kerning = GetKerningSpacing();
+
             foreach (char c in CharacterGlyphDict.Keys) // debugging
             {
                 Debug.WriteLine($"Char: {c}");
@@ -55,6 +61,243 @@ namespace Text
 
         }
 
+        public readonly struct KerningPair(Glyph LeftGlyph, Glyph RightGlyph, short kerning)
+        {
+            public readonly Glyph LeftGlyph = LeftGlyph;
+            public readonly Glyph RightGlyph = RightGlyph;
+
+            public readonly short kerning = kerning; 
+
+        }
+
+        public KerningPair[] GetKerningSpacing()
+        {
+            List<KerningPair> Kerning = new();
+
+            Reader.GoTo(TableLocation["GPOS"].offset);
+
+            Reader.SkipBytes(6);
+            UInt16 featureListOffset = Reader.ReadUInt16();
+            UInt16 lookupListOffset = Reader.ReadUInt16();
+
+            Reader.GoTo(TableLocation["GPOS"].offset + featureListOffset);
+
+
+            ushort featureCount = Reader.ReadUInt16();
+            List<ushort> kernLookupIndices = new();
+
+            for (int i = 0; i < featureCount; i++)
+            {
+                string tag = Encoding.ASCII.GetString(Reader.ReadBytes(4));
+                ushort featureTableOffset = Reader.ReadUInt16();
+
+                if (tag == "kern")
+                {
+                    
+
+                    uint kernOffset = Reader.GetULocation();
+                    uint kernFeatureTable = TableLocation["GPOS"].offset + featureListOffset + featureTableOffset;
+
+                    Reader.GoTo(kernFeatureTable);
+                    
+                    ushort featureParams = Reader.ReadUInt16(); // usually 0
+                    ushort lookupIndexCount = Reader.ReadUInt16();
+
+                    for (int k = 0; k < lookupIndexCount; k++){
+
+                        ushort lookupIndex = Reader.ReadUInt16();
+                        if (!kernLookupIndices.Contains(lookupIndex))
+                            kernLookupIndices.Add(lookupIndex);
+                    }
+                    
+                    
+                    Debug.WriteLine($"{tag} {kernOffset}");
+
+                    Reader.GoTo(kernOffset);
+
+                }
+            }
+
+            Debug.WriteLine($"{string.Join(",",kernLookupIndices)}");
+
+            Reader.GoTo(TableLocation["GPOS"].offset + lookupListOffset);
+            ushort lookupCount = Reader.ReadUInt16();
+
+            Debug.WriteLine($"Total lookups in GPOS{lookupCount}");
+
+            ushort[] lookupOffsets = new ushort[lookupCount];
+
+            for (int i = 0; i < lookupCount; i++) 
+            {
+                lookupOffsets[i] = Reader.ReadUInt16();
+
+            }
+
+            foreach (ushort lookupIndex in kernLookupIndices)
+            {
+                uint lookupStart = TableLocation["GPOS"].offset + lookupListOffset + lookupOffsets[lookupIndex];
+                Reader.GoTo(lookupStart);
+
+                ushort lookupType = Reader.ReadUInt16();
+                ushort lookupFlag = Reader.ReadUInt16();
+                ushort subTableCount = Reader.ReadUInt16();
+
+                if (lookupType == 2) 
+                {
+
+                    Debug.WriteLine("  ^ This is a Pair Adjustment lookup (kerning)");
+                    ushort[] subTableOffsets = new ushort[subTableCount];
+                    for (int i = 0; i< subTableCount; i++)
+                    {
+                        subTableOffsets[i] = Reader.ReadUInt16();
+                    }
+
+                    Debug.WriteLine($"  Has {subTableOffsets.Length} subtables");
+                    foreach (ushort subTableOffset in subTableOffsets)
+                    {
+                        uint subTableStart = lookupStart + subTableOffset;
+                        Reader.GoTo(subTableStart);
+
+                        ushort posFormat = Reader.ReadUInt16();
+
+                        if (posFormat == 1)
+                        {
+                            ushort coverageOffset = Reader.ReadUInt16();
+                            ushort valueFormat1 = Reader.ReadUInt16();
+                            ushort valueFormat2 = Reader.ReadUInt16();
+                            ushort pairSetCount = Reader.ReadUInt16();
+
+                            Debug.WriteLine($"    ValueFormat1: 0x{valueFormat1:X4}, ValueFormat2: 0x{valueFormat2:X4}");
+                            Debug.WriteLine($"    PairSetCount: {pairSetCount}");
+
+                            ushort[] pairSetOffsets = new ushort[pairSetCount];
+
+                            for (int k = 0; k < pairSetCount; k++)
+                            {
+                                pairSetOffsets[k] = Reader.ReadUInt16();
+                            }
+
+                            uint currentPos = Reader.GetULocation();
+                            Reader.GoTo(subTableStart + coverageOffset);
+                            ushort coverageFormat = Reader.ReadUInt16();
+
+                            List<uint> firstGlyph = new List<uint>();
+                            if (coverageFormat == 1)
+                            { 
+                                uint glyphCount = Reader.ReadUInt16();
+                                for (int k = 0; k < glyphCount; k++)
+                                {
+                                    firstGlyph.Add(Reader.ReadUInt16());
+                                }
+                            }
+                            else if(coverageFormat == 2)
+                            {
+                                ushort rangeCount = Reader.ReadUInt16();
+                                for (int k = 0; k < glyphCount; k++)
+                                {
+                                    uint startGlyph = Reader.ReadUInt16();
+                                    uint endGlyph = Reader.ReadUInt16();
+                                    uint startCoverageIndex = Reader.ReadUInt16();
+
+                                    for (uint e = startGlyph; e <= endGlyph; e++)
+                                    {
+                                        firstGlyph.Add((ushort)e);
+                                    }
+                                }
+                            }
+
+                            Reader.GoTo(currentPos);
+
+                            int valueSize1 = GetValueRecordSize(valueFormat1);
+                            int valueSize2 = GetValueRecordSize(valueFormat2);
+
+                            int totalPairs = 0;
+                            for(int k = 0; k < pairSetCount; k++)
+                            {
+                                Reader.GoTo(subTableStart + pairSetOffsets[k]);
+                                ushort pairValueCount = Reader.ReadUInt16();
+                                totalPairs += pairValueCount;
+
+                                for (int e = 0; e < pairValueCount; e++)
+                                {
+                                    ushort secondGlyph = Reader.ReadUInt16();
+
+                                    short xAdvance1 = ReadValueRecord(valueFormat1);
+                                    Reader.SkipBytes(valueSize2);
+
+                                    if (xAdvance1 != 0)
+                                    {
+                                        Debug.WriteLine($"Left {firstGlyph[k]}, Right {secondGlyph}");
+
+                                        Glyph Left = null;
+                                        Glyph Right = null;
+
+                                        foreach ((uint c,uint i ) in CharacterIndexMap)
+                                        {
+                                            if (i == firstGlyph[k])
+                                            {
+                                                Left = CharacterGlyphDict[(char)c];
+                                                Debug.WriteLine($"Left {(char)c}");
+                                            }
+                                        }
+
+                                        foreach ((uint c, uint i) in CharacterIndexMap)
+                                        {
+                                            if (i == secondGlyph)
+                                            {
+                                                Right = CharacterGlyphDict[(char)c];
+                                                Debug.WriteLine($"Right {(char)c}");
+                                            }
+                                        }
+
+                                        Debug.WriteLine($"Advance {xAdvance1}");
+
+                                        Kerning.Add(new KerningPair(Left, Right, xAdvance1));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else 
+                { 
+                
+                }
+            }
+
+
+            return Kerning.ToArray();
+        }
+
+        private int GetValueRecordSize(ushort valueFormat)
+        {
+            int size = 0;
+            if ((valueFormat & 0x0001) != 0) size += 2; // XPlacement
+            if ((valueFormat & 0x0002) != 0) size += 2; // YPlacement
+            if ((valueFormat & 0x0004) != 0) size += 2; // XAdvance
+            if ((valueFormat & 0x0008) != 0) size += 2; // YAdvance
+            if ((valueFormat & 0x0010) != 0) size += 2; // XPlaDevice
+            if ((valueFormat & 0x0020) != 0) size += 2; // YPlaDevice
+            if ((valueFormat & 0x0040) != 0) size += 2; // XAdvDevice
+            if ((valueFormat & 0x0080) != 0) size += 2; // YAdvDevice
+            return size;
+        }
+
+        private short ReadValueRecord(ushort valueFormat)
+        {
+            short xAdvance = 0;
+
+            if ((valueFormat & 0x0001) != 0) Reader.SkipBytes(2); // XPlacement
+            if ((valueFormat & 0x0002) != 0) Reader.SkipBytes(2); // YPlacement
+            if ((valueFormat & 0x0004) != 0) xAdvance = Reader.ReadInt16(); // XAdvance
+            if ((valueFormat & 0x0008) != 0) Reader.SkipBytes(2); // YAdvance
+            if ((valueFormat & 0x0010) != 0) Reader.SkipBytes(2); // XPlaDevice
+            if ((valueFormat & 0x0020) != 0) Reader.SkipBytes(2); // YPlaDevice
+            if ((valueFormat & 0x0040) != 0) Reader.SkipBytes(2); // XAdvDevice
+            if ((valueFormat & 0x0080) != 0) Reader.SkipBytes(2); // YAdvDevice
+
+            return xAdvance;
+        }
         public static void ListenForInput()
         {
 
@@ -66,7 +309,9 @@ namespace Text
 
             for (int i = 0; i < CharacterIndexMap.Length; i++) // map each character to its glyph
             {
-                CharacterGlyphDict.Add((char)CharacterIndexMap[i].unicode, Glyph.ReadSimpleGlyph(Reader, GlyphLocation, GlyphLocation[CharacterIndexMap[i].index], Metrics[i].advanceWidth, Metrics[i].leftSideBearing));
+                uint glyphIndex = CharacterIndexMap[i].index; 
+
+                CharacterGlyphDict.Add((char)CharacterIndexMap[i].unicode, Glyph.ReadSimpleGlyph(Reader, GlyphLocation, GlyphLocation[glyphIndex], Metrics[glyphIndex].advanceWidth, Metrics[glyphIndex].leftSideBearing));
                 CharacterGlyphDict.Last().Value.Load();
             }
 

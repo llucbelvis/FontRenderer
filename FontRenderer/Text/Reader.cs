@@ -79,6 +79,18 @@ namespace Text
             return value;
         }
 
+        public byte[] ReadBytes(int count)
+        {
+            byte[] bytes = new byte[count];
+
+            for (int i  = 0; i < count; i++)
+            {
+                bytes[i] =  BinaryReader.ReadByte();
+            }
+
+            return bytes;
+        }
+
         public sbyte ReadSByte()
         {
             sbyte value = BinaryReader.ReadSByte();

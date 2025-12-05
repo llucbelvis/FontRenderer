@@ -27,23 +27,48 @@ namespace Text
             uint indexOffset = 0;
             float spacing = 0;
 
+            Glyph PreviousGlyph = null;
+
             foreach (char c in text)
             {
                 if (Font.CharacterGlyphDict[c] == null)
                 {
 
-                    (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict.First().Value, spacing, vertex, index, indexOffset);
+                    (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict.First().Value, spacing, vertex, index, indexOffset, 0);
+                    PreviousGlyph = null;
                     continue;
                 }
 
                 if (c == ' ')
                 {
                     spacing += (Font.CharacterGlyphDict[' '].advanceWidth / 10000f);
+                    PreviousGlyph = null;
                     continue;
                 }
 
-
-                (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict[c], spacing, vertex, index, indexOffset);
+                if (PreviousGlyph == null)
+                {
+                    (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict[c], spacing, vertex, index, indexOffset, 0);
+                    PreviousGlyph = Font.CharacterGlyphDict[c];
+                }
+                else
+                {
+                    
+                    foreach (Text.Font.KerningPair Pair in Font?.Kerning)
+                    {
+                        if (Pair.LeftGlyph == PreviousGlyph && Pair.RightGlyph == Font.CharacterGlyphDict[c])
+                        {
+                            (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict[c], spacing, vertex, index, indexOffset, Pair.kerning);
+                            break;
+                        }
+                        else
+                        {
+                            (spacing, vertex, index, indexOffset) = AddGlyph(Font.CharacterGlyphDict[c], spacing, vertex, index, indexOffset, 0);
+                            break;
+                        }
+                    }
+                    PreviousGlyph = Font.CharacterGlyphDict[c];
+                }
             }
 
 
@@ -53,7 +78,7 @@ namespace Text
             this.Buffer(GraphicsDevice);
         }
 
-        public (float, List<VertexPosition>, List<uint>, uint) AddGlyph(Glyph Glyph, float spacing, List<VertexPosition> vertex, List<uint> index, uint indexOffset)
+        public (float, List<VertexPosition>, List<uint>, uint) AddGlyph(Glyph Glyph, float spacing, List<VertexPosition> vertex, List<uint> index, uint indexOffset, short kerning)
         {
             foreach (uint i in Glyph.index)
             {
@@ -72,7 +97,7 @@ namespace Text
                 vertex.Add(spaced);
             }
 
-            spacing += Glyph.advanceWidth / 10000f;
+            spacing += (kerning == 0) ? Glyph.advanceWidth / 10000f : kerning / 10000f;
 
             return (spacing, vertex, index, indexOffset);
         }

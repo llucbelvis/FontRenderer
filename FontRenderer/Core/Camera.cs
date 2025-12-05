@@ -38,15 +38,15 @@ namespace Text
         public void Move(ProjectInput.Input W, ProjectInput.Input A, ProjectInput.Input S, ProjectInput.Input D)
         {
             if (W.press)
-                position.Y -= 0.01f * zoom;
+                position.Y -= 0.001f * zoom;
 
             if (S.press)
-                position.Y += 0.01f * zoom;
+                position.Y += 0.001f * zoom;
             if (A.press)
-                position.X += 0.01f * zoom;
+                position.X += 0.001f * zoom;
 
             if (D.press)
-                position.X -= 0.01f * zoom;
+                position.X -= 0.001f * zoom;
         }
     }
 }
